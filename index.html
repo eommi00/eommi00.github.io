@@ -297,6 +297,16 @@ html.v-open,html.v-open body{overflow:hidden}
 .imp-g{flex:0 1 230px;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)}
 .imp-g .ctl{width:100%}
 .imp-note{margin:0;font-size:13.5px;color:var(--ink);background:var(--note-bg);border-radius:8px;padding:9px 12px}
+.imp-sec{display:flex;flex-direction:column;gap:8px;min-width:0}
+.imp-sec h3{margin:0;font-size:14px;font-weight:600;color:var(--ink-2)}
+.imp-order{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.imp-order li{padding-left:2px}
+.imp-order .o{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 8px;vertical-align:top}
+.imp-order li::marker{font-family:var(--f-mono);color:var(--muted);font-size:12.5px}
+.imp-order .muted{font-size:13px}
+.imp-gone{margin:0;font-size:13px}
+.tag.mv{background:var(--s-doing-bg);color:var(--s-doing)}
+.tag.del{background:var(--danger-bg);color:var(--danger)}
 </style></head><body><div id="app" class="app"></div><script>(function () {
 'use strict';
 
@@ -1400,10 +1410,14 @@ function siteView() {
 }
 
 /* ---------- 업데이트 가져오기 ----------
-   Claude가 만든 업데이트 파일(JSON)을 골라, 새 항목은 더하고 같은 원본은 새 파일로 바꾼 뒤 바로 저장해요.
-   파일 형식: {format:'eommi-hub-update', v:1, id, title, created, items:[{url, title, kind, status, summary, next,
-   updated, group:{alias,name,color}, files:[{name, type, data(base64), src, replaces:[예전 파일 이름]}]}]} */
+   Claude가 만든 업데이트 파일(JSON)을 골라 한 번에 반영하고 바로 저장해요.
+   v1: items[{url, title, kind, status, summary, next, updated, group:{alias,name,color}, updateOnly,
+             files:[{name, type, data(base64), src, replaces:[예전 파일 이름]}]}]
+   v2: + layout[{key, name, color, match:[별칭·이름]}] → 프로젝트 이름·순서 맞추기
+       + items[].group:{key} · move:true(기존 항목 옮기기) · remove:true(기존 항목 지우기)
+       + removeEmptyGroups[{match:[…]}] → 비게 된 프로젝트 정리, sortItems:'updated-desc' → 최근 것이 위로 */
 var IMP_FORMAT = 'eommi-hub-update';
+var IMP_VERSION = 2;
 var MAX_IMPORT = 300 * 1024 * 1024;
 var IMP = null;
 function b64size(s) {
@@ -1431,45 +1445,166 @@ function impFindGroup(spec) {
   return S.groups.filter(function (g) { return a && g.alias === a; })[0] ||
     S.groups.filter(function (g) { return n && titleKey(g.name) === n; })[0] || null;
 }
+function impMatchGroup(match, claimed) {
+  var keys = (Array.isArray(match) ? match : []).map(function (m) { return str(m, 80); }).filter(Boolean);
+  for (var k = 0; k < keys.length; k++) {
+    var m = keys[k], mt = titleKey(m);
+    var g = S.groups.filter(function (x) { return !claimed[x.id] && x.alias && x.alias === m; })[0] ||
+      S.groups.filter(function (x) { return !claimed[x.id] && titleKey(x.name) === mt; })[0];
+    if (g) return g;
+  }
+  return null;
+}
 function impReplaces(spec, old) { return !!((spec.src && old.src === spec.src) || spec.replaces.indexOf(old.name) >= 0); }
+function impLayout(pkg) {
+  if (!Array.isArray(pkg.layout)) return null;
+  var claimed = {}, out = [];
+  pkg.layout.forEach(function (L) {
+    if (!L || typeof L !== 'object') return;
+    var key = str(L.key, 60), name = str(L.name, 80);
+    if (!key || !name || out.some(function (o) { return o.key === key; })) return;
+    var g = impMatchGroup([key].concat(Array.isArray(L.match) ? L.match : []).concat([name]), claimed);
+    if (g) claimed[g.id] = true;
+    out.push({
+      key: key, name: name, color: validColor(L.color), gid: g ? g.id : null, oldName: g ? g.name : '',
+      action: !g ? 'new' : (g.name === name ? 'keep' : 'rename')
+    });
+  });
+  return out.length ? out : null;
+}
+// 대상 프로젝트는 문자열로 가리켜요: 'k:<layout key>' · 'g:<기존 프로젝트 id>' · 'n:<새 프로젝트 이름>'
+function impTarget(I, spec) {
+  spec = spec && typeof spec === 'object' ? spec : {};
+  var key = str(spec.key, 60);
+  if (key && I.layout && I.layout.some(function (L) { return L.key === key; })) return 'k:' + key;
+  var g = impFindGroup(spec);
+  if (g) {
+    var L = (I.layout || []).filter(function (x) { return x.gid === g.id; })[0];
+    return L ? 'k:' + L.key : 'g:' + g.id;
+  }
+  return 'n:' + (str(spec.name, 80) || '새 프로젝트');
+}
+function impLayoutOf(I, key) { return (I.layout || []).filter(function (L) { return L.key === key; })[0] || null; }
+function impRefGid(I, ref) {
+  ref = String(ref || '');
+  if (ref.indexOf('k:') === 0) { var L = impLayoutOf(I, ref.slice(2)); return L ? L.gid : null; }
+  if (ref.indexOf('g:') === 0) return ref.slice(2);
+  return null;
+}
+function impRefName(I, ref) {
+  ref = String(ref || '');
+  if (ref.indexOf('k:') === 0) { var L = impLayoutOf(I, ref.slice(2)); return L ? L.name : ''; }
+  if (ref.indexOf('g:') === 0) { var g = findGroup(ref.slice(2)); return g ? g.name : ''; }
+  return ref.slice(2);
+}
+function impFiles(raw) {
+  return (Array.isArray(raw.files) ? raw.files : []).filter(function (f) {
+    return f && typeof f.data === 'string' && f.data && f.name;
+  }).map(function (f) {
+    var name = str(f.name, 160);
+    return {
+      name: name, type: str(f.type, 120) || fileType({ name: name }), size: b64size(f.data), data: f.data, src: str(f.src, 80),
+      replaces: (Array.isArray(f.replaces) ? f.replaces : []).map(function (x) { return str(x, 160); }).filter(Boolean)
+    };
+  });
+}
 function impPlan(pkg) {
-  var entries = [];
+  var I = { layout: impLayout(pkg), entries: [], removeGroups: [], sort: pkg.sortItems === 'updated-desc' };
   pkg.items.forEach(function (raw, i) {
     if (!raw || typeof raw !== 'object') return;
-    var files = (Array.isArray(raw.files) ? raw.files : []).filter(function (f) {
-      return f && typeof f.data === 'string' && f.data && f.name;
-    }).map(function (f) {
-      var name = str(f.name, 160);
-      return {
-        name: name, type: str(f.type, 120) || fileType({ name: name }), size: b64size(f.data), data: f.data, src: str(f.src, 80),
-        replaces: (Array.isArray(f.replaces) ? f.replaces : []).map(function (x) { return str(x, 160); }).filter(Boolean)
-      };
-    });
+    var files = impFiles(raw);
     var hit = impFindItem(raw);
-    var e = {
-      i: i, raw: raw, files: files, title: str(raw.title, 200) || '제목 없음',
-      newGroupName: str(raw.group && raw.group.name, 80) || '새 프로젝트'
-    };
-    if (hit) {
-      e.type = 'update'; e.itemId = hit.it.id; e.title = hit.it.title; e.gname = hit.g.name;
+    var e = { i: i, raw: raw, files: files, title: str(raw.title, 200) || '제목 없음' };
+    if (raw.remove) {
+      if (!hit) return; // 이미 없는 항목
+      e.type = 'remove'; e.itemId = hit.it.id; e.title = hit.it.title; e.fromGid = hit.g.id; e.gname = hit.g.name; e.files = [];
+    } else if (hit) {
+      e.type = 'update'; e.itemId = hit.it.id; e.title = hit.it.title; e.fromGid = hit.g.id; e.gname = hit.g.name;
       e.replace = files.map(function (spec) {
         return (hit.it.files || []).filter(function (x) { return impReplaces(spec, x); }).map(function (x) { return x.name; });
       });
-      if (!files.length) return; // 바꿀 원본이 없는 기존 항목은 건너뛰어요
+      if (raw.move && raw.group) {
+        var to = impTarget(I, raw.group);
+        if (impRefGid(I, to) !== hit.g.id) e.move = to;
+      }
+      if (!files.length && !e.move) return; // 바꿀 것이 없는 기존 항목
     } else if (raw.updateOnly) {
-      e.type = 'skip'; // 원본만 바꾸는 항목인데 사이트에서 지웠다면 다시 만들지 않아요
+      e.type = 'skip'; e.files = []; // 원본만 바꾸는 항목인데 사이트에서 지웠다면 다시 만들지 않아요
     } else {
-      var g = impFindGroup(raw.group);
-      e.type = 'new'; e.gid = g ? g.id : '__new__';
+      e.type = 'new'; e.target = impTarget(I, raw.group);
     }
-    entries.push(e);
+    I.entries.push(e);
   });
-  return entries;
+  I.removeGroups = impEmptyGroups(pkg, I);
+  return I;
 }
-function impCounts(entries) {
-  var n = 0, r = 0;
-  entries.forEach(function (e) { if (e.type === 'new') n++; else if (e.type === 'update') r += e.files.length; });
-  return { added: n, replaced: r };
+function impCountsAfter(I) {
+  var counts = {};
+  S.groups.forEach(function (g) { counts[g.id] = g.items.length; });
+  I.entries.forEach(function (e) {
+    var to = null;
+    if (e.type === 'remove') counts[e.fromGid]--;
+    else if (e.type === 'update' && e.move) { counts[e.fromGid]--; to = impRefGid(I, e.move); }
+    else if (e.type === 'new') to = impRefGid(I, e.target);
+    if (to && counts[to] != null) counts[to]++;
+  });
+  return counts;
+}
+function impEmptyGroups(pkg, I) {
+  if (!Array.isArray(pkg.removeEmptyGroups)) return [];
+  var keep = {}, seen = {}, out = [];
+  (I.layout || []).forEach(function (L) { if (L.gid) keep[L.gid] = true; });
+  var counts = impCountsAfter(I);
+  pkg.removeEmptyGroups.forEach(function (R) {
+    var g = impMatchGroup(R && R.match, seen);
+    if (!g || keep[g.id]) return;
+    seen[g.id] = true;
+    if (counts[g.id] <= 0) out.push({ gid: g.id, name: g.name });
+  });
+  return out;
+}
+function impCounts(I) {
+  var c = { added: 0, replaced: 0, moved: 0, removed: 0 };
+  I.entries.forEach(function (e) {
+    if (e.type === 'new') c.added++;
+    else if (e.type === 'update') { c.replaced += e.files.length; if (e.move) c.moved++; }
+    else if (e.type === 'remove') c.removed++;
+  });
+  return c;
+}
+function impGuestImpact(I) {
+  var lost = [];
+  ((S.admin && S.admin.guests) || []).forEach(function (gu) {
+    var n = 0;
+    I.entries.forEach(function (e) {
+      if (e.type !== 'update' || !e.move) return;
+      var to = impRefGid(I, e.move);
+      if (gu.groups.indexOf(e.fromGid) >= 0 && !(to && gu.groups.indexOf(to) >= 0)) n++;
+    });
+    if (n) lost.push((gu.label || gu.id) + ' ' + n + '개');
+  });
+  return lost;
+}
+function impNewGroupNames(I) {
+  var names = (I.layout || []).filter(function (L) { return !L.gid; }).map(function (L) { return L.name; });
+  I.entries.forEach(function (e) {
+    if (e.type === 'new' && String(e.target).indexOf('n:') === 0 && names.indexOf(e.target.slice(2)) < 0) names.push(e.target.slice(2));
+  });
+  return names;
+}
+function impGroupOptions(I, selected) {
+  var removing = {};
+  I.removeGroups.forEach(function (r) { removing[r.gid] = true; });
+  var opts = [], used = {};
+  (I.layout || []).forEach(function (L) {
+    opts.push({ v: 'k:' + L.key, t: L.name + (L.gid ? '' : ' (새 프로젝트)') });
+    if (L.gid) used[L.gid] = true;
+  });
+  S.groups.forEach(function (g) { if (!used[g.id] && !removing[g.id]) opts.push({ v: 'g:' + g.id, t: g.name }); });
+  if (String(selected).indexOf('n:') === 0) opts.push({ v: selected, t: '새 프로젝트: ' + selected.slice(2) });
+  return opts.map(function (o) {
+    return '<option value="' + esc(o.v) + '"' + (o.v === selected ? ' selected' : '') + '>' + esc(o.t) + '</option>';
+  }).join('');
 }
 function importPanel() {
   var I = IMP;
@@ -1480,10 +1615,24 @@ function importPanel() {
       '<button class="btn" type="button" data-action="imp-pick">다른 파일 고르기</button>' +
       '<button class="btn ghost" type="button" data-action="imp-cancel">닫기</button></div></section>';
   }
-  var c = impCounts(I.entries), busy = I.state === 'applying';
-  h += '<p class="desc">' + esc(I.pkg.title) + ' · 새 항목 ' + c.added + '개 · 원본 바꿈 ' + c.replaced + '개</p></div>';
+  var c = impCounts(I), busy = I.state === 'applying';
+  h += '<p class="desc">' + esc(I.pkg.title) + ' · 새 항목 ' + c.added + '개 · 원본 바꿈 ' + c.replaced + '개' +
+    (c.moved ? ' · 옮김 ' + c.moved + '개' : '') + (c.removed ? ' · 지움 ' + c.removed + '개' : '') + '</p></div>';
   if (I.already) h += '<p class="imp-note">이미 가져온 적이 있는 업데이트예요. 다시 가져와도 같은 원본으로 바뀔 뿐 항목이 늘어나지 않아요.</p>';
-  h += '<ol class="imp-list">' + I.entries.map(impLine).join('') + '</ol>';
+  if (I.layout) {
+    h += '<div class="imp-sec"><h3>프로젝트 이름·순서</h3><ol class="imp-order">' + I.layout.map(function (L) {
+      var tag = L.action === 'new' ? '<span class="tag new">새로 만듦</span>'
+        : L.action === 'rename' ? '<span class="tag upd">이름 바꿈</span><span class="muted">' + esc(L.oldName) + ' → </span>' : '';
+      return '<li><span class="o">' + tag + '<b>' + esc(L.name) + '</b></span></li>';
+    }).join('') + '</ol>' +
+      (I.removeGroups.length ? '<p class="muted imp-gone">비게 되어 지우는 프로젝트: ' + esc(I.removeGroups.map(function (r) { return r.name; }).join(', ')) + '</p>' : '') +
+      '</div>';
+  }
+  h += '<div class="imp-sec">' + (I.layout ? '<h3>항목</h3>' : '') + '<ol class="imp-list">' + I.entries.map(impLine).join('') + '</ol></div>';
+  var fresh = impNewGroupNames(I);
+  if (fresh.length) h += '<p class="imp-note">새 프로젝트(' + esc(fresh.join(', ')) + ')는 처음엔 나만 볼 수 있어요. 보여 줄 계정은 ‘계정·공유’에서 체크하세요.</p>';
+  var lost = impGuestImpact(I);
+  if (lost.length) h += '<p class="imp-note">옮겨지는 항목 때문에 더 이상 못 보게 되는 계정: ' + esc(lost.join(', ')) + '. 필요하면 ‘계정·공유’에서 새 프로젝트를 체크하세요.</p>';
   if (!S.admin.github || !S.admin.github.token) h += '<p class="imp-note">아직 저장 연결이 없어요. 가져온 뒤 ‘사이트 연결’에서 토큰을 넣고 저장하면 돼요.</p>';
   h += '<p class="desc">‘가져와서 저장’을 누르면 원본을 잠가서 바로 저장해요. 사이트에는 1~2분 뒤 반영돼요.</p>' +
     (I.err ? '<p class="err" role="alert">' + esc(I.err) + '</p>' : '') +
@@ -1492,26 +1641,28 @@ function importPanel() {
   return h;
 }
 function impLine(e) {
+  var I = IMP;
   if (e.type === 'skip') {
     return '<li class="skip"><span class="tag">건너뜀</span><div class="imp-t"><b>' + esc(e.title) + '</b>' +
       '<span class="muted">사이트에서 이 항목을 찾지 못해 원본을 바꾸지 않아요.</span></div></li>';
+  }
+  if (e.type === 'remove') {
+    return '<li><span class="tag del">지움</span><div class="imp-t"><b>' + esc(e.title) + '</b><span class="muted">' + esc(e.gname) + '</span></div></li>';
   }
   if (e.type === 'update') {
     var lines = e.files.map(function (f, q) {
       var olds = e.replace[q] || [];
       return (olds.length ? olds.join(', ') + ' → ' : '추가 · ') + f.name + ' (' + fmtSize(f.size) + ')';
     });
-    return '<li><span class="tag upd">원본 바꿈</span><div class="imp-t"><b>' + esc(e.title) + '</b><span class="muted">' + esc(e.gname) + '</span>' +
+    var where = e.move ? e.gname + ' → ' + impRefName(I, e.move) : e.gname;
+    return '<li><span class="tag ' + (e.move ? 'mv">옮김' : 'upd">원본 바꿈') + '</span><div class="imp-t"><b>' + esc(e.title) + '</b><span class="muted">' + esc(where) + '</span>' +
       lines.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div></li>';
   }
-  var opts = S.groups.map(function (g) {
-    return '<option value="' + g.id + '"' + (g.id === e.gid ? ' selected' : '') + '>' + esc(g.name) + '</option>';
-  }).join('') + (e.gid === '__new__' ? '<option value="__new__" selected>새 프로젝트: ' + esc(e.newGroupName) + '</option>' : '');
   var files = e.files.map(function (f) { return f.name + ' (' + fmtSize(f.size) + ')'; });
   return '<li><span class="tag new">새 항목</span><div class="imp-t"><b>' + esc(e.title) + '</b>' +
     (e.raw.summary ? '<span>' + esc(str(e.raw.summary, 600)) + '</span>' : '') +
     files.map(function (x) { return '<span class="muted">' + esc(x) + '</span>'; }).join('') + '</div>' +
-    '<label class="imp-g" for="imp-g-' + e.i + '">넣을 프로젝트<select class="ctl" id="imp-g-' + e.i + '">' + opts + '</select></label></li>';
+    '<label class="imp-g" for="imp-g-' + e.i + '">넣을 프로젝트<select class="ctl" id="imp-g-' + e.i + '">' + impGroupOptions(I, e.target) + '</select></label></li>';
 }
 function scrollToImp() {
   var p = byId('imp-panel');
@@ -1533,22 +1684,36 @@ async function onImportChosen(file) {
   if (!err && (!pkg || typeof pkg !== 'object' || pkg.format !== IMP_FORMAT || !Array.isArray(pkg.items))) {
     err = '허브 업데이트 파일이 아니에요. Claude가 준 업데이트 파일(.json)을 골라 주세요.';
   }
-  if (!err && Number(pkg.v) > 1) err = '이 사이트보다 새 형식의 업데이트 파일이에요. 함께 받은 index.html을 먼저 GitHub에 올려 주세요.';
-  var entries = err ? [] : impPlan(pkg);
-  if (!err && !entries.some(function (e) { return e.type !== 'skip'; })) err = '이 업데이트 파일에는 이 사이트에 가져올 내용이 없어요.';
+  if (!err && Number(pkg.v) > IMP_VERSION) err = '이 사이트보다 새 형식의 업데이트 파일이에요. 함께 받은 index.html을 먼저 GitHub에 올려 주세요.';
+  var plan = err ? null : impPlan(pkg);
+  if (!err && !plan.entries.some(function (e) { return e.type !== 'skip'; }) &&
+    !(plan.layout && plan.layout.some(function (L) { return L.action !== 'keep'; }))) err = '이 업데이트 파일에는 이 사이트에 가져올 내용이 없어요.';
   if (!err) {
     var big = [];
-    entries.forEach(function (e) { if (e.type !== 'skip') e.files.forEach(function (f) { if (f.size > MAX_FILE) big.push(f.name); }); });
+    plan.entries.forEach(function (e) { e.files.forEach(function (f) { if (f.size > MAX_FILE) big.push(f.name); }); });
     if (big.length) err = '25MB가 넘는 원본이 있어 가져올 수 없어요: ' + big.join(', ');
   }
   if (err) { IMP = { state: 'error', err: err }; render(); scrollToImp(); return; }
   var id = str(pkg.id, 60) || ('u-' + str(pkg.created, 10));
-  IMP = {
-    state: 'preview', entries: entries,
+  IMP = Object.assign(plan, {
+    state: 'preview',
     pkg: { id: id, title: str(pkg.title, 80) || '업데이트' },
     already: (Array.isArray(S.admin.imports) ? S.admin.imports : []).some(function (x) { return x && x.id === id; })
-  };
+  });
   render(); scrollToImp();
+}
+function impApplyLayout(I) {
+  var map = {};
+  (I.layout || []).forEach(function (L) {
+    var g = L.gid ? findGroup(L.gid) : null;
+    if (g) { g.name = L.name; g.alias = L.key; }
+    else {
+      g = { id: rid('g'), name: L.name, color: L.color || nextColor(), alias: L.key, order: S.groups.length, items: [] };
+      S.groups.push(g);
+    }
+    map[L.key] = g;
+  });
+  return map;
 }
 async function onImportApply() {
   var I = IMP;
@@ -1556,7 +1721,7 @@ async function onImportApply() {
   I.entries.forEach(function (e) {
     if (e.type !== 'new') return;
     var sel = byId('imp-g-' + e.i);
-    if (sel && sel.value) e.gid = sel.value;
+    if (sel && sel.value) e.target = sel.value;
   });
   I.state = 'applying'; I.err = ''; render({ keep: true });
   // 1) 원본을 모두 먼저 잠가요. 하나라도 실패하면 아무것도 바꾸지 않아요.
@@ -1564,7 +1729,7 @@ async function onImportApply() {
   try {
     for (var k = 0; k < I.entries.length; k++) {
       var list = [];
-      for (var j = 0; I.entries[k].type !== 'skip' && j < I.entries[k].files.length; j++) {
+      for (var j = 0; j < I.entries[k].files.length; j++) {
         var spec = I.entries[k].files[j];
         var bytes = b64d(spec.data);
         var fid = rid('f'), key = rand(32);
@@ -1581,12 +1746,32 @@ async function onImportApply() {
     return;
   }
   if (IMP !== I) { made.forEach(function (fid) { delete S.pending[fid]; }); return; }
-  // 2) 항목에 반영
-  var newGroups = {};
+  // 2) 프로젝트 이름·순서 → 항목 → 빈 프로젝트 정리 → 순서
+  var keyMap = impApplyLayout(I), newGroups = {};
+  var resolve = function (ref, raw) {
+    ref = String(ref || '');
+    if (ref.indexOf('k:') === 0 && keyMap[ref.slice(2)]) return keyMap[ref.slice(2)];
+    if (ref.indexOf('g:') === 0 && findGroup(ref.slice(2))) return findGroup(ref.slice(2));
+    var nm = ref.indexOf('n:') === 0 ? ref.slice(2) : (str(raw.group && raw.group.name, 80) || '새 프로젝트');
+    var g = newGroups[nm] || impFindGroup(raw.group);
+    if (!g) {
+      g = {
+        id: rid('g'), name: nm, color: validColor(raw.group && raw.group.color) || nextColor(),
+        alias: str(raw.group && raw.group.alias, 60), order: S.groups.length, items: []
+      };
+      S.groups.push(g);
+    }
+    newGroups[nm] = g;
+    return g;
+  };
   I.entries.forEach(function (e, k) {
     if (e.type === 'skip') return;
     var nf = sealed[k], raw = e.raw;
-    var hit = e.type === 'update' ? findItem(e.itemId) : null;
+    var hit = e.type === 'new' ? null : findItem(e.itemId);
+    if (e.type === 'remove') {
+      if (hit) { hit.g.items.splice(hit.idx, 1); delete S.admin.privateNotes[hit.it.id]; }
+      return;
+    }
     if (e.type === 'update' && !hit && raw.updateOnly) { nf.forEach(function (f) { delete S.pending[f.fid]; }); return; }
     if (hit) {
       var it = hit.it, out = [], placed = {};
@@ -1600,26 +1785,35 @@ async function onImportApply() {
       it.files = out;
       var up = String(raw.updated || '').slice(0, 10);
       if (/^\d{4}-\d{2}-\d{2}$/.test(up) && up > (it.updated || '')) it.updated = up;
+      if (e.move) {
+        var to = resolve(e.move, raw);
+        if (to && to !== hit.g) { hit.g.items.splice(hit.idx, 1); to.items.push(it); }
+      }
       return;
     }
-    var g = e.gid && e.gid !== '__new__' ? findGroup(e.gid) : null;
-    if (!g) g = impFindGroup(raw.group);
-    if (!g) {
-      var nm = e.newGroupName || '새 프로젝트';
-      g = newGroups[nm];
-      if (!g) {
-        g = {
-          id: rid('g'), name: nm, color: validColor(raw.group && raw.group.color) || nextColor(),
-          alias: str(raw.group && raw.group.alias, 60), order: S.groups.length, items: []
-        };
-        S.groups.push(g); newGroups[nm] = g;
-      }
-    }
-    g.items.push(cleanItem({
+    resolve(e.target, raw).items.push(cleanItem({
       title: e.title, url: raw.url, kind: raw.kind, status: raw.status, summary: raw.summary, next: raw.next,
       memo: raw.memo, updated: raw.updated, linkShared: false, files: nf
     }));
   });
+  I.removeGroups.forEach(function (r) {
+    var g = findGroup(r.gid);
+    if (!g || g.items.length) return;
+    S.groups.splice(S.groups.indexOf(g), 1);
+    S.admin.guests.forEach(function (gu) { gu.groups = gu.groups.filter(function (x) { return x !== r.gid; }); });
+  });
+  if (I.layout) {
+    var first = I.layout.map(function (L) { return keyMap[L.key]; }).filter(function (g) { return g && S.groups.indexOf(g) >= 0; });
+    S.groups = first.concat(S.groups.filter(function (g) { return first.indexOf(g) < 0; }));
+    if (I.sort) {
+      first.forEach(function (g) {
+        g.items = g.items.map(function (it, n) { return { it: it, n: n }; }).sort(function (a, b) {
+          var ua = a.it.updated || '', ub = b.it.updated || '';
+          return ua === ub ? a.n - b.n : (ua < ub ? 1 : -1);
+        }).map(function (x) { return x.it; });
+      });
+    }
+  }
   S.admin.imports = (Array.isArray(S.admin.imports) ? S.admin.imports : []).filter(function (x) { return x && x.id !== I.pkg.id; })
     .concat([{ id: I.pkg.id, title: I.pkg.title, at: today() }]).slice(-20);
   IMP = null;
