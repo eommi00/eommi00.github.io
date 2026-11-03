@@ -281,6 +281,22 @@ html.v-open,html.v-open body{overflow:hidden}
 .gate-copy ol{margin:4px 0 0;padding-left:20px;color:var(--ink-2);font-size:14.5px;display:grid;gap:5px;max-width:38em}
 .gate-copy ol li::marker{font-family:var(--f-mono);color:var(--muted);font-size:13px}
 .card .progress{font-size:13px;color:var(--muted);min-height:1.3em}
+
+/* ---- 업데이트 가져오기 ---- */
+.index .imp-btn{align-self:flex-start;margin-top:4px}
+@media (max-width:900px){.index .imp-btn{margin-top:0;flex:0 0 auto}}
+.imp{border-color:var(--accent)}
+.imp-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.imp-list li{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);min-width:0}
+.imp-t{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:3px;font-size:13.5px;line-height:1.45;color:var(--ink-2);overflow-wrap:anywhere}
+.imp-t b{font-size:14.5px;font-weight:600;color:var(--ink)}
+.tag{flex:0 0 auto;font-size:12px;font-weight:600;line-height:1.5;padding:1px 9px;border-radius:999px;margin-top:1px;background:var(--s-hold-bg);color:var(--s-hold)}
+.imp-list li.skip{opacity:.8}
+.tag.new{background:var(--s-done-bg);color:var(--s-done)}
+.tag.upd{background:var(--s-review-bg);color:var(--s-review)}
+.imp-g{flex:0 1 230px;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)}
+.imp-g .ctl{width:100%}
+.imp-note{margin:0;font-size:13.5px;color:var(--ink);background:var(--note-bg);border-radius:8px;padding:9px 12px}
 </style></head><body><div id="app" class="app"></div><script>(function () {
 'use strict';
 
@@ -442,7 +458,7 @@ function freshUi(tab) {
     tab: tab || 'hub', status: 'all', q: '', edit: null, addTo: null, editGroup: null, newGroup: false,
     acctEdit: null, ownerForm: false, ghForm: false, showPw: null, confirmDel: null, confirmLogout: false,
     err: '', formErr: '', formFor: null, busy: false, notice: '', newCode: null, code: null,
-    saveErr: '', saveErrGh: false, formFiles: null, ffBusy: false, loadErr: '', progress: ''
+    saveErr: '', saveErrGh: false, formFiles: null, ffBusy: false, loadErr: '', loadDetail: '', progress: ''
   };
 }
 var S = {
@@ -478,10 +494,13 @@ function cleanFile(f) {
   var fid = String(f.fid || '');
   if (!/^[a-z0-9]{4,40}$/i.test(fid) || !f.key) return null;
   var ad = String(f.added || '').slice(0, 10);
-  return {
+  var out = {
     fid: fid, name: str(f.name, 160) || '파일', type: str(f.type, 120), size: Math.max(0, Number(f.size) || 0),
     key: String(f.key), added: /^\d{4}-\d{2}-\d{2}$/.test(ad) ? ad : ''
   };
+  var src = str(f.src, 80);
+  if (src) out.src = src; // 업데이트 파일로 들어온 원본의 이름표 (다음 업데이트 때 같은 원본을 찾아 바꿔요)
+  return out;
 }
 function cleanItem(d) {
   var up = String(d.updated || '').slice(0, 10);
@@ -1072,13 +1091,26 @@ function codeView() {
 }
 function notReadyView() {
   var e = S.ui.loadErr;
+  if (e === 'file') {
+    return gate({
+      eyebrow: '비공개 허브', title: '사이트 주소로 열어 주세요',
+      lede: '내 컴퓨터에 있는 이 파일을 바로 열면, 브라우저가 보안 때문에 내용 파일을 읽지 못해요. GitHub에 올린 뒤 사이트 주소로 열어야 처음 설정과 로그인 화면이 나와요.',
+      steps: [
+        'github.com에서 저장소를 만들고(Public), hub-site 폴더 안의 파일과 files 폴더를 모두 올려요.',
+        '저장소 Settings → Pages에서 Branch를 main, / (root)로 정하고 Save를 눌러요.',
+        '1~2분 뒤 나오는 사이트 주소로 열어요.'
+      ],
+      card: '<h2>여기서는 열 수 없어요</h2><p class="note">사이트 주소는 https://GitHub아이디.github.io/저장소이름/ 모양이에요. 그 주소로 열면 받은 설정 코드를 넣는 화면이 나와요.</p>'
+    });
+  }
   var lede = e === 'missing' ? '아직 사이트 데이터가 올라가지 않았어요. 저장소에 vault.json과 files 폴더가 있는지 확인해 주세요. 방금 올렸다면 1~2분 뒤 새로고침해 주세요.'
     : e === 'bad' ? '데이터 파일(vault.json)을 읽을 수 없어요. 파일이 바뀌지 않았는지 확인해 주세요.'
     : e === 'crypto' ? '이 브라우저에서는 허브를 열 수 없어요. 최신 크롬·사파리·엣지로 열어 주세요.'
     : '내용을 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.';
   return gate({
     eyebrow: '비공개 허브', title: HUB_NAME, lede: lede,
-    card: '<h2>' + (e === 'missing' ? '준비 중' : '열 수 없어요') + '</h2><p class="note">문제가 계속되면 허브 관리자에게 알려 주세요.</p>' +
+    card: '<h2>' + (e === 'missing' ? '준비 중' : '열 수 없어요') + '</h2><p class="note">문제가 계속되면 허브 관리자에게 알려 주세요.' +
+      (S.ui.loadDetail ? ' (' + esc(S.ui.loadDetail) + ')' : '') + '</p>' +
       '<button class="btn pri wide" type="button" data-action="reload">새로고침</button>'
   });
 }
@@ -1133,8 +1165,10 @@ function projectsView() {
     S.groups.map(function (g) {
       return '<button class="ix" type="button" data-action="jump" data-g="' + g.id + '" style="--c:var(--p-' + g.color + ')"><i></i><span>' + esc(g.name) + '</span><b>' + g.items.length + '</b></button>';
     }).join('') +
-    (owner ? '<button class="btn sm ghost add" type="button" data-action="add-group">+ 프로젝트 추가</button>' : '') +
+    (owner ? '<button class="btn sm ghost add" type="button" data-action="add-group">+ 프로젝트 추가</button>' +
+      '<button class="btn sm imp-btn" type="button" data-action="imp-pick" id="imp-open">업데이트 가져오기</button>' : '') +
     '</nav><div class="main">';
+  if (owner && IMP) h += importPanel();
   if (all.length) {
     h += '<div class="toolbar"><div class="chips" role="group" aria-label="상태로 거르기">' +
       '<button class="chip" type="button" data-action="status" data-s="all" aria-pressed="' + (st === 'all') + '">전체<span class="c">' + all.length + '</span></button>' +
@@ -1340,6 +1374,10 @@ function siteView() {
   if (S.ui.notice) h += '<div class="notice">' + S.ui.notice + '</div>';
   h += '<section class="panel"><div><h2>사이트 주소</h2><p class="desc">이 주소와 아이디·비밀번호를 받은 사람만 내용을 볼 수 있어요.</p></div>' +
     '<div class="codebox siteurl"><code>' + esc(siteUrl()) + '</code><button class="btn sm" type="button" data-action="copy" data-copy="' + esc(siteUrl()) + '">복사</button></div></section>';
+  var imps = Array.isArray(S.admin.imports) ? S.admin.imports.slice(-5).reverse() : [];
+  h += '<section class="panel"><div><h2>업데이트 가져오기</h2><p class="desc">Claude가 만들어 준 업데이트 파일(.json)을 고르면, 새 결과물과 바뀐 원본을 한 번에 넣고 저장해요.</p></div>' +
+    (imps.length ? '<dl class="kv">' + imps.map(function (x) { return '<dt>' + esc(x.at || '') + '</dt><dd>' + esc(x.title || x.id || '') + '</dd>'; }).join('') + '</dl>' : '') +
+    '<div class="row"><button class="btn" type="button" data-action="imp-pick">업데이트 파일 고르기</button></div></section>';
   h += '<section class="panel"><div><h2>저장 연결 (GitHub)</h2><p class="desc">사이트에서 바꾼 내용은 이 사이트가 올라가 있는 GitHub 저장소에 저장돼요. 토큰은 관리자 비밀번호로 잠가서 보관하고, 관리자만 쓸 수 있어요.</p></div>';
   if (g && !S.ui.ghForm) {
     h += '<dl class="kv"><dt>저장소</dt><dd>' + esc(g.owner + '/' + g.repo) + '</dd><dt>브랜치</dt><dd>' + esc(g.branch || 'main') + '</dd>' +
@@ -1359,6 +1397,236 @@ function siteView() {
     '</ul></section>';
   h += '</div>';
   return h;
+}
+
+/* ---------- 업데이트 가져오기 ----------
+   Claude가 만든 업데이트 파일(JSON)을 골라, 새 항목은 더하고 같은 원본은 새 파일로 바꾼 뒤 바로 저장해요.
+   파일 형식: {format:'eommi-hub-update', v:1, id, title, created, items:[{url, title, kind, status, summary, next,
+   updated, group:{alias,name,color}, files:[{name, type, data(base64), src, replaces:[예전 파일 이름]}]}]} */
+var IMP_FORMAT = 'eommi-hub-update';
+var MAX_IMPORT = 300 * 1024 * 1024;
+var IMP = null;
+function b64size(s) {
+  var t = String(s || '').replace(/\s+/g, '');
+  var padN = /==$/.test(t) ? 2 : /=$/.test(t) ? 1 : 0;
+  return Math.max(0, Math.floor(t.length * 3 / 4) - padN);
+}
+function urlKey(u) { var s = safeUrl(u); return s ? s.replace(/[?#].*$/, '').replace(/\/+$/, '') : ''; }
+function titleKey(t) { return String(t || '').normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase(); }
+function impFindItem(raw) {
+  var uk = urlKey(raw.url), tk = titleKey(raw.title), byTitle = null;
+  for (var i = 0; i < S.groups.length; i++) {
+    var g = S.groups[i];
+    for (var j = 0; j < g.items.length; j++) {
+      var it = g.items[j];
+      if (uk && urlKey(it.url) === uk) return { g: g, it: it };
+      if (!byTitle && tk && titleKey(it.title) === tk) byTitle = { g: g, it: it };
+    }
+  }
+  return byTitle;
+}
+function impFindGroup(spec) {
+  spec = spec && typeof spec === 'object' ? spec : {};
+  var a = str(spec.alias, 60), n = titleKey(spec.name);
+  return S.groups.filter(function (g) { return a && g.alias === a; })[0] ||
+    S.groups.filter(function (g) { return n && titleKey(g.name) === n; })[0] || null;
+}
+function impReplaces(spec, old) { return !!((spec.src && old.src === spec.src) || spec.replaces.indexOf(old.name) >= 0); }
+function impPlan(pkg) {
+  var entries = [];
+  pkg.items.forEach(function (raw, i) {
+    if (!raw || typeof raw !== 'object') return;
+    var files = (Array.isArray(raw.files) ? raw.files : []).filter(function (f) {
+      return f && typeof f.data === 'string' && f.data && f.name;
+    }).map(function (f) {
+      var name = str(f.name, 160);
+      return {
+        name: name, type: str(f.type, 120) || fileType({ name: name }), size: b64size(f.data), data: f.data, src: str(f.src, 80),
+        replaces: (Array.isArray(f.replaces) ? f.replaces : []).map(function (x) { return str(x, 160); }).filter(Boolean)
+      };
+    });
+    var hit = impFindItem(raw);
+    var e = {
+      i: i, raw: raw, files: files, title: str(raw.title, 200) || '제목 없음',
+      newGroupName: str(raw.group && raw.group.name, 80) || '새 프로젝트'
+    };
+    if (hit) {
+      e.type = 'update'; e.itemId = hit.it.id; e.title = hit.it.title; e.gname = hit.g.name;
+      e.replace = files.map(function (spec) {
+        return (hit.it.files || []).filter(function (x) { return impReplaces(spec, x); }).map(function (x) { return x.name; });
+      });
+      if (!files.length) return; // 바꿀 원본이 없는 기존 항목은 건너뛰어요
+    } else if (raw.updateOnly) {
+      e.type = 'skip'; // 원본만 바꾸는 항목인데 사이트에서 지웠다면 다시 만들지 않아요
+    } else {
+      var g = impFindGroup(raw.group);
+      e.type = 'new'; e.gid = g ? g.id : '__new__';
+    }
+    entries.push(e);
+  });
+  return entries;
+}
+function impCounts(entries) {
+  var n = 0, r = 0;
+  entries.forEach(function (e) { if (e.type === 'new') n++; else if (e.type === 'update') r += e.files.length; });
+  return { added: n, replaced: r };
+}
+function importPanel() {
+  var I = IMP;
+  var h = '<section class="panel imp" id="imp-panel" aria-labelledby="imp-h"><div><h2 id="imp-h">업데이트 가져오기</h2>';
+  if (I.state === 'reading') return h + '<p class="desc" role="status">파일을 읽는 중…</p></div></section>';
+  if (I.state === 'error') {
+    return h + '<p class="err" role="alert">' + esc(I.err) + '</p></div><div class="row">' +
+      '<button class="btn" type="button" data-action="imp-pick">다른 파일 고르기</button>' +
+      '<button class="btn ghost" type="button" data-action="imp-cancel">닫기</button></div></section>';
+  }
+  var c = impCounts(I.entries), busy = I.state === 'applying';
+  h += '<p class="desc">' + esc(I.pkg.title) + ' · 새 항목 ' + c.added + '개 · 원본 바꿈 ' + c.replaced + '개</p></div>';
+  if (I.already) h += '<p class="imp-note">이미 가져온 적이 있는 업데이트예요. 다시 가져와도 같은 원본으로 바뀔 뿐 항목이 늘어나지 않아요.</p>';
+  h += '<ol class="imp-list">' + I.entries.map(impLine).join('') + '</ol>';
+  if (!S.admin.github || !S.admin.github.token) h += '<p class="imp-note">아직 저장 연결이 없어요. 가져온 뒤 ‘사이트 연결’에서 토큰을 넣고 저장하면 돼요.</p>';
+  h += '<p class="desc">‘가져와서 저장’을 누르면 원본을 잠가서 바로 저장해요. 사이트에는 1~2분 뒤 반영돼요.</p>' +
+    (I.err ? '<p class="err" role="alert">' + esc(I.err) + '</p>' : '') +
+    '<div class="row"><button class="btn pri" type="button" data-action="imp-apply" id="imp-apply"' + (busy ? ' disabled' : '') + '>' + (busy ? '원본을 잠그는 중…' : '가져와서 저장') + '</button>' +
+    '<button class="btn" type="button" data-action="imp-cancel"' + (busy ? ' disabled' : '') + '>취소</button></div></section>';
+  return h;
+}
+function impLine(e) {
+  if (e.type === 'skip') {
+    return '<li class="skip"><span class="tag">건너뜀</span><div class="imp-t"><b>' + esc(e.title) + '</b>' +
+      '<span class="muted">사이트에서 이 항목을 찾지 못해 원본을 바꾸지 않아요.</span></div></li>';
+  }
+  if (e.type === 'update') {
+    var lines = e.files.map(function (f, q) {
+      var olds = e.replace[q] || [];
+      return (olds.length ? olds.join(', ') + ' → ' : '추가 · ') + f.name + ' (' + fmtSize(f.size) + ')';
+    });
+    return '<li><span class="tag upd">원본 바꿈</span><div class="imp-t"><b>' + esc(e.title) + '</b><span class="muted">' + esc(e.gname) + '</span>' +
+      lines.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div></li>';
+  }
+  var opts = S.groups.map(function (g) {
+    return '<option value="' + g.id + '"' + (g.id === e.gid ? ' selected' : '') + '>' + esc(g.name) + '</option>';
+  }).join('') + (e.gid === '__new__' ? '<option value="__new__" selected>새 프로젝트: ' + esc(e.newGroupName) + '</option>' : '');
+  var files = e.files.map(function (f) { return f.name + ' (' + fmtSize(f.size) + ')'; });
+  return '<li><span class="tag new">새 항목</span><div class="imp-t"><b>' + esc(e.title) + '</b>' +
+    (e.raw.summary ? '<span>' + esc(str(e.raw.summary, 600)) + '</span>' : '') +
+    files.map(function (x) { return '<span class="muted">' + esc(x) + '</span>'; }).join('') + '</div>' +
+    '<label class="imp-g" for="imp-g-' + e.i + '">넣을 프로젝트<select class="ctl" id="imp-g-' + e.i + '">' + opts + '</select></label></li>';
+}
+function scrollToImp() {
+  var p = byId('imp-panel');
+  if (p) { try { p.scrollIntoView({ block: 'start', behavior: reduceMotion() ? 'auto' : 'smooth' }); } catch (e) { /* 없음 */ } }
+}
+async function onImportChosen(file) {
+  if (S.role !== 'owner' || S.saving || (IMP && IMP.state === 'applying')) return;
+  closeEditors();
+  IMP = { state: 'reading' };
+  S.ui.tab = 'hub';
+  render(); scrollToImp();
+  var pkg = null, err = '';
+  try {
+    if (file.size > MAX_IMPORT) throw { code: 'big' };
+    pkg = JSON.parse(await file.text());
+  } catch (e) {
+    err = e && e.code === 'big' ? '파일이 너무 커서 읽을 수 없어요.' : '업데이트 파일을 읽지 못했어요. 받은 파일을 그대로 골랐는지 확인해 주세요.';
+  }
+  if (!err && (!pkg || typeof pkg !== 'object' || pkg.format !== IMP_FORMAT || !Array.isArray(pkg.items))) {
+    err = '허브 업데이트 파일이 아니에요. Claude가 준 업데이트 파일(.json)을 골라 주세요.';
+  }
+  if (!err && Number(pkg.v) > 1) err = '이 사이트보다 새 형식의 업데이트 파일이에요. 함께 받은 index.html을 먼저 GitHub에 올려 주세요.';
+  var entries = err ? [] : impPlan(pkg);
+  if (!err && !entries.some(function (e) { return e.type !== 'skip'; })) err = '이 업데이트 파일에는 이 사이트에 가져올 내용이 없어요.';
+  if (!err) {
+    var big = [];
+    entries.forEach(function (e) { if (e.type !== 'skip') e.files.forEach(function (f) { if (f.size > MAX_FILE) big.push(f.name); }); });
+    if (big.length) err = '25MB가 넘는 원본이 있어 가져올 수 없어요: ' + big.join(', ');
+  }
+  if (err) { IMP = { state: 'error', err: err }; render(); scrollToImp(); return; }
+  var id = str(pkg.id, 60) || ('u-' + str(pkg.created, 10));
+  IMP = {
+    state: 'preview', entries: entries,
+    pkg: { id: id, title: str(pkg.title, 80) || '업데이트' },
+    already: (Array.isArray(S.admin.imports) ? S.admin.imports : []).some(function (x) { return x && x.id === id; })
+  };
+  render(); scrollToImp();
+}
+async function onImportApply() {
+  var I = IMP;
+  if (!I || I.state !== 'preview' || S.saving) return;
+  I.entries.forEach(function (e) {
+    if (e.type !== 'new') return;
+    var sel = byId('imp-g-' + e.i);
+    if (sel && sel.value) e.gid = sel.value;
+  });
+  I.state = 'applying'; I.err = ''; render({ keep: true });
+  // 1) 원본을 모두 먼저 잠가요. 하나라도 실패하면 아무것도 바꾸지 않아요.
+  var made = [], sealed = [];
+  try {
+    for (var k = 0; k < I.entries.length; k++) {
+      var list = [];
+      for (var j = 0; I.entries[k].type !== 'skip' && j < I.entries[k].files.length; j++) {
+        var spec = I.entries[k].files[j];
+        var bytes = b64d(spec.data);
+        var fid = rid('f'), key = rand(32);
+        S.pending[fid] = await sealBytes(key, bytes, 'file:' + fid);
+        made.push(fid);
+        list.push(cleanFile({ fid: fid, name: spec.name, type: spec.type, size: bytes.length, key: b64e(key), added: today(), src: spec.src }));
+      }
+      sealed.push(list);
+    }
+  } catch (e) {
+    made.forEach(function (fid) { delete S.pending[fid]; });
+    if (IMP !== I) return;
+    I.state = 'preview'; I.err = '원본을 잠그지 못했어요. 다시 시도해 주세요.'; render({ keep: true });
+    return;
+  }
+  if (IMP !== I) { made.forEach(function (fid) { delete S.pending[fid]; }); return; }
+  // 2) 항목에 반영
+  var newGroups = {};
+  I.entries.forEach(function (e, k) {
+    if (e.type === 'skip') return;
+    var nf = sealed[k], raw = e.raw;
+    var hit = e.type === 'update' ? findItem(e.itemId) : null;
+    if (e.type === 'update' && !hit && raw.updateOnly) { nf.forEach(function (f) { delete S.pending[f.fid]; }); return; }
+    if (hit) {
+      var it = hit.it, out = [], placed = {};
+      (it.files || []).forEach(function (x) {
+        var idx = -1;
+        for (var q = 0; q < e.files.length; q++) if (impReplaces(e.files[q], x)) { idx = q; break; }
+        if (idx < 0) { out.push(x); return; }
+        if (!placed[idx]) { out.push(nf[idx]); placed[idx] = true; }
+      });
+      nf.forEach(function (f, q) { if (!placed[q]) out.push(f); });
+      it.files = out;
+      var up = String(raw.updated || '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(up) && up > (it.updated || '')) it.updated = up;
+      return;
+    }
+    var g = e.gid && e.gid !== '__new__' ? findGroup(e.gid) : null;
+    if (!g) g = impFindGroup(raw.group);
+    if (!g) {
+      var nm = e.newGroupName || '새 프로젝트';
+      g = newGroups[nm];
+      if (!g) {
+        g = {
+          id: rid('g'), name: nm, color: validColor(raw.group && raw.group.color) || nextColor(),
+          alias: str(raw.group && raw.group.alias, 60), order: S.groups.length, items: []
+        };
+        S.groups.push(g); newGroups[nm] = g;
+      }
+    }
+    g.items.push(cleanItem({
+      title: e.title, url: raw.url, kind: raw.kind, status: raw.status, summary: raw.summary, next: raw.next,
+      memo: raw.memo, updated: raw.updated, linkShared: false, files: nf
+    }));
+  });
+  S.admin.imports = (Array.isArray(S.admin.imports) ? S.admin.imports : []).filter(function (x) { return x && x.id !== I.pkg.id; })
+    .concat([{ id: I.pkg.id, title: I.pkg.title, at: today() }]).slice(-20);
+  IMP = null;
+  dirty();
+  render();
+  window.scrollTo(0, 0);
+  await onSave();
 }
 
 /* ---------- 그리기 ---------- */
@@ -1739,6 +2007,7 @@ function logout() {
   clearStash();
   clearTimeout(toastTimer);
   var tEl = byId('hub-toast'); if (tEl) tEl.innerHTML = '';
+  IMP = null;
   S.role = null; S.h = null; S.kek = null; S.mk = null; S.me = null; S.ownerAcc = null; S.admin = null; S.flow = null; S.setupCode = null;
   S.groups = []; S.dirty = 0; S.saving = false; S.snapshot = null; S.pending = {};
   S.ui = freshUi(); S.screen = Object.keys(vault.accounts).length ? 'login' : 'first';
@@ -1771,6 +2040,11 @@ document.addEventListener('change', function (e) {
   if (!t) return;
   if (t.id === 'rc-ok') { var go = byId('rc-go'); if (go) go.disabled = !t.checked || S.ui.busy; }
   if (t.id === 'f-files') { var list = t.files; onFilesChosen(list).then(function () { try { t.value = ''; } catch (x) { /* 없음 */ } }); }
+  if (t.id === 'imp-file') {
+    var pf = t.files && t.files[0];
+    try { t.value = ''; } catch (x) { /* 없음 */ }
+    if (pf) onImportChosen(pf);
+  }
 });
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && V) { e.preventDefault(); closeViewer(); }
@@ -1842,8 +2116,15 @@ document.addEventListener('click', function (e) {
     case 'owner-form': closeEditors(); S.ui.ownerForm = true; render(); focusEl(S.kek ? 'o-cur' : 'o-id'); break;
     case 'gh-form': closeEditors(); S.ui.ghForm = true; render(); focusEl('gh-token'); break;
     case 'regen-code': onRegenCode(); break;
+    case 'imp-pick': {
+      if (S.role !== 'owner' || S.saving || (IMP && IMP.state === 'applying')) break;
+      var pick = byId('imp-file'); if (pick) pick.click();
+      break;
+    }
+    case 'imp-apply': onImportApply(); break;
+    case 'imp-cancel': IMP = null; render(); break;
     case 'save': onSave(); break;
-    case 'revert': closeViewer(); restoreSnapshot(); render(); toast('저장하지 않은 변경을 되돌렸어요'); break;
+    case 'revert': closeViewer(); IMP = null; restoreSnapshot(); render(); toast('저장하지 않은 변경을 되돌렸어요'); break;
     case 'logout':
       if (S.dirty && !S.ui.confirmLogout) { S.ui.confirmLogout = true; render({ keep: true }); toast('저장하지 않은 변경이 있어요.'); break; }
       logout();
@@ -1855,9 +2136,9 @@ document.addEventListener('click', function (e) {
 /* ---------- 시작 ---------- */
 async function loadVault() {
   var r;
-  try { r = await fetch('vault.json?t=' + Date.now(), { cache: 'no-store' }); } catch (e) { return { err: 'net' }; }
+  try { r = await fetch('vault.json?t=' + Date.now(), { cache: 'no-store' }); } catch (e) { return { err: 'net', detail: '연결 실패' }; }
   if (r.status === 404) return { err: 'missing' };
-  if (!r.ok) return { err: 'net' };
+  if (!r.ok) return { err: 'net', detail: '오류 ' + r.status };
   var v;
   try { v = await r.json(); } catch (e) { return { err: 'bad' }; }
   if (!validVault(v)) return { err: 'bad' };
@@ -1874,12 +2155,14 @@ async function fetchFreshVault(m) {
 }
 async function boot() {
   var slots = document.createElement('div');
-  slots.innerHTML = '<div id="hub-savebar"></div><div id="hub-toast" aria-live="polite"></div><div id="hub-viewer"></div>';
+  slots.innerHTML = '<div id="hub-savebar"></div><div id="hub-toast" aria-live="polite"></div><div id="hub-viewer"></div>' +
+    '<input type="file" id="imp-file" accept=".json,application/json" hidden>';
   while (slots.firstChild) document.body.appendChild(slots.firstChild);
+  if (location.protocol === 'file:') { S.ui.loadErr = 'file'; S.screen = 'notready'; render(); return; }
   if (!window.crypto || !crypto.subtle) { S.ui.loadErr = 'crypto'; S.screen = 'notready'; render(); return; }
   S.screen = 'loading'; render();
   var res = await loadVault();
-  if (res.err) { S.ui.loadErr = res.err; S.screen = 'notready'; render(); return; }
+  if (res.err) { S.ui.loadErr = res.err; S.ui.loadDetail = res.detail || ''; S.screen = 'notready'; render(); return; }
   vault = res.vault;
   var m = recentSave();
   if (m && vault.rev !== m.rev) {
